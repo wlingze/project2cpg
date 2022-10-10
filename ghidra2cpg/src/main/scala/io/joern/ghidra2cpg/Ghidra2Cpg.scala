@@ -8,6 +8,7 @@ import ghidra.framework.model.{Project, ProjectLocator}
 import ghidra.framework.project.{DefaultProject, DefaultProjectManager}
 import ghidra.framework.protocol.ghidra.{GhidraURLConnection, Handler}
 import ghidra.framework.{Application, HeadlessGhidraApplicationConfiguration}
+import ghidra.program.database.ProgramContentHandler
 import ghidra.program.flatapi.FlatProgramAPI
 import ghidra.program.model.listing.Program
 import ghidra.program.util.GhidraProgramUtilities
@@ -20,7 +21,7 @@ import io.shiftleft.x2cpg.X2Cpg
 import org.apache.commons.io.FileUtils
 import utilities.util.FileUtilities
 
-import java.io.File
+import java.io.{File, IOException}
 import java.nio.file.Files
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
@@ -35,49 +36,71 @@ object Types {
   }
 }
 class Ghidra2Cpg(
-    inputFile: File,
-    outputFile: Option[String]
+                  projectPath: String,
+                  projectName: String,
+                  rootFolder: String,
+                  handleFile: String,
+                  outputFile: Option[String]
+
 ) {
 
-  val tempWorkingDir: File = Files.createTempDirectory("ghidra2cpg_tmp").toFile
-  // tempWorkingDir.deleteOnExit() is not reliable,
-  // adding a shutdown hook seems to work https://stackoverflow.com/posts/35212952/revisions
-  Runtime.getRuntime.addShutdownHook(new Thread(() => FileUtils.deleteQuietly(tempWorkingDir)))
+  def String(): Unit = {
+    println(s"project folder:\t$projectPath")
+    println(s"project name:\t$projectName")
+    println(s"input file: \t$handleFile")
+    println(s"output file: \t$outputFile")
+  }
 
   def createCpg(): Unit = {
     // We need this for the URL handler
     Handler.registerHandler()
 
-    var projectManager: Option[HeadlessGhidraProjectManager] =
-      None: Option[HeadlessGhidraProjectManager]
-
-    var project: Option[Project] = None
-    // Initialize application (if necessary and only once)
     if (!Application.isInitialized) {
-      val configuration = new HeadlessGhidraApplicationConfiguration
+      var configuration = new HeadlessGhidraApplicationConfiguration
       configuration.setInitializeLogging(false)
       Application.initializeApplication(new GhidraJarApplicationLayout, configuration)
     }
 
-    if (!inputFile.isDirectory && !inputFile.isFile)
-      throw new InvalidInputException(
-        s"$inputFile is not a valid directory or file."
-      )
-
-    val locator          = new ProjectLocator(tempWorkingDir.getAbsolutePath, CommandLineConfig.projectName)
+    var project: Project = null
     var program: Program = null
-    try {
-      projectManager = Some(new HeadlessGhidraProjectManager)
-      project = Some(projectManager.get.createProject(locator, null, false))
-      program = AutoImporter.importByUsingBestGuess(
-        inputFile,
-        null,
-        this,
-        new MessageLog,
-        TaskMonitor.DUMMY
-      )
 
-      analyzeProgram(inputFile.getAbsolutePath, program)
+    var projectManager: HeadlessGhidraProjectManager = new HeadlessGhidraProjectManager
+    var dir = new File(projectPath)
+    if (!dir.isDirectory) {
+      println(s"$dir is not a directory")
+    }
+
+    var locator = new ProjectLocator(dir.getAbsolutePath, projectName)
+    if (!locator.getProjectDir.exists) {
+      println(s"$dir $projectName is not exist")
+      sys.exit(-1)
+    }
+    try {
+      project = new HeadlessProject(projectManager, locator)
+      var domFolder = project.getProjectData.getFolder(rootFolder)
+      if (domFolder == null) {
+        println(s"$rootFolder$handleFile is not found")
+        sys.exit(-1)
+      }
+      if (domFolder.isEmpty) {
+        println(s"$rootFolder$handleFile is empty")
+        sys.exit(-1)
+      }
+
+      var domFile = domFolder.getFile(handleFile)
+      if (domFile == null) {
+        println(s"$rootFolder$handleFile is not found")
+        sys.exit(-1)
+      }
+
+      if (!ProgramContentHandler.PROGRAM_CONTENT_TYPE.equals(domFile.getContentType)) {
+        println(s"$rootFolder$handleFile is not program type")
+        sys.exit(-1)
+      }
+
+      var domObject =  domFile.getDomainObject(this,true, false, TaskMonitor.DUMMY)
+      program = domObject.asInstanceOf[Program]
+      analyzeProgram(domFile.getPathname, program)
     } catch {
       case e: Throwable =>
         e.printStackTrace()
@@ -87,12 +110,9 @@ class Ghidra2Cpg(
         program.release(this)
         program = null
       }
-      project.get.close()
+      project.close()
       // Used to have this in a config but we delete the directory anyway
       // if (!config.runScriptsNoImport && config.deleteProject)
-      FileUtilities.deleteDir(locator.getProjectDir)
-      locator.getMarkerFile.delete
-
     }
   }
   private def analyzeProgram(fileAbsolutePath: String, program: Program): Unit = {
@@ -184,4 +204,5 @@ class Ghidra2Cpg(
   ) extends DefaultProject(projectManager, connection) {}
 
   private class HeadlessGhidraProjectManager extends DefaultProjectManager {}
+  private class HeadlessProject(projectManager : HeadlessGhidraProjectManager , locator: ProjectLocator ) extends DefaultProject(projectManager, locator, false) {}
 }
