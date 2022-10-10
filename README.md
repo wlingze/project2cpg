@@ -16,7 +16,7 @@ Requirements:
 
 1. Clone the project
 2. Build the project `sbt stage`
-3. Create a CPG `./ghidra2cpg.sh /path/to/your/binary -o /path/to/cpg.bin`
+3. Create a CPG `./ghidra2cpg.sh ${ProjectPath}!${ProjectName}!${ProgramName} -o /path/to/cpg.bin`
 4. Download joern with
    ```
    wget https://github.com/joernio/joern/releases/download/v1.1.164/joern-cli.zip
